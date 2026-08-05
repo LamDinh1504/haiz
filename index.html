@@ -575,7 +575,7 @@
 
         // --- KHỞI TẠO SUPABASE ---
         // THAY 2 CHUỖI NÀY BẰNG KEY BẠN VỪA COPY Ở BƯỚC 1
-        const SUPABASE_URL = 'https://dlgrvakibllvpquxccsk.supabase.co/rest/v1/';
+        const SUPABASE_URL = 'https://dlgrvakibllvpquxccsk.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsZ3J2YWtpYmxsdnBxdXhjY3NrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU5NDIxMzAsImV4cCI6MjEwMTUxODEzMH0.JD2GZXzAXgb_r2Zz206urZaZiOh-6zUx05LYhMFdTlI';
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -1002,28 +1002,95 @@
             const [authPassword, setAuthPassword] = useState('');
             const [authError, setAuthError] = useState(false);
 
-            const [projects, setProjects] = useState(() => {
-                const saved = localStorage.getItem('dt_pm_v9_enterprise');
-                return saved ? JSON.parse(saved) : [{ id: 'sample_01', name: 'DỰ ÁN CẢI TIẾN XƯỞNG NHỰA SỐ 1', manager: 'Lê Hoàng Sơn', createdAt: new Date().toISOString(), tasks: getTemplateTasks(), notes: '', password: '' }];
-            });
+            const [projects, setProjects] = useState([]);
+            const [projectsLoading, setProjectsLoading] = useState(true);
+            const lastSavedProjects = useRef(null);
 
-            const projectsRef = useRef(projects);
-            useEffect(() => { projectsRef.current = projects; }, [projects]);
+            useEffect(() => {
+                const loadData = async () => {
+                    try {
+                        const { data, error } = await supabase.from('dt_projects').select('*');
+                        if (error) throw error;
+                        if (data && data.length > 0) {
+                            const mapped = data.map(p => ({
+                                id: p.project_id,
+                                name: p.name,
+                                manager: p.manager,
+                                password: p.password,
+                                createdAt: p.created_at,
+                                notes: p.notes,
+                                tasks: p.tasks || [],
+                                todos: p.todos || []
+                            }));
+                            setProjects(mapped);
+                            lastSavedProjects.current = mapped;
+                        } else {
+                            const sample = [{ id: 'sample_01', name: 'DỰ ÁN CẢI TIẾN XƯỞNG NHỰA SỐ 1', manager: 'Lê Hoàng Sơn', createdAt: new Date().toISOString(), tasks: getTemplateTasks(), notes: '', password: '', todos: [] }];
+                            setProjects(sample);
+                            await supabase.from('dt_projects').upsert({
+                                project_id: sample[0].id,
+                                name: sample[0].name,
+                                manager: sample[0].manager,
+                                password: sample[0].password,
+                                created_at: sample[0].createdAt,
+                                notes: sample[0].notes,
+                                tasks: sample[0].tasks,
+                                todos: sample[0].todos
+                            });
+                            lastSavedProjects.current = sample;
+                        }
+                    } catch (err) {
+                        console.error("Error loading projects from Supabase:", err);
+                    } finally {
+                        setProjectsLoading(false);
+                    }
+                };
+                loadData();
+            }, []);
 
             useEffect(() => {
                 const timer = setInterval(() => setTime(new Date()), 1000);
-                const hourlySave = setInterval(() => {
-                    localStorage.setItem('dt_pm_v9_enterprise', JSON.stringify(projectsRef.current));
-                    console.log("Hệ thống đã tự động sao lưu dữ liệu (Chu kỳ 1 giờ)");
-                }, 3600000);
-
-                return () => {
-                    clearInterval(timer);
-                    clearInterval(hourlySave);
-                };
+                return () => clearInterval(timer);
             }, []);
 
-            useEffect(() => { localStorage.setItem('dt_pm_v9_enterprise', JSON.stringify(projects)); }, [projects]);
+            useEffect(() => {
+                if (!projects || projectsLoading) return;
+                if (lastSavedProjects.current === null) {
+                    lastSavedProjects.current = projects;
+                    return;
+                }
+
+                const timer = setTimeout(async () => {
+                    const deleted = lastSavedProjects.current.filter(op => !projects.some(p => p.id === op.id));
+                    for (const p of deleted) {
+                        await supabase.from('dt_projects').delete().eq('project_id', p.id);
+                    }
+
+                    const changedProjects = projects.filter(p => {
+                        const prev = lastSavedProjects.current?.find(op => op.id === p.id);
+                        if (!prev) return true;
+                        return JSON.stringify(p) !== JSON.stringify(prev);
+                    });
+
+                    for (const p of changedProjects) {
+                        await supabase.from('dt_projects').upsert({
+                            project_id: p.id,
+                            name: p.name,
+                            manager: p.manager,
+                            password: p.password,
+                            created_at: p.createdAt,
+                            notes: p.notes,
+                            tasks: p.tasks,
+                            todos: p.todos
+                        }, { onConflict: 'project_id' });
+                    }
+
+                    lastSavedProjects.current = projects;
+                }, 1000);
+
+                return () => clearTimeout(timer);
+            }, [projects, projectsLoading]);
+
             const recalculateTree = (nodes) => { return nodes.map(n => { if (n.subTasks && n.subTasks.length > 0) { const subs = recalculateTree(n.subTasks); let tWP = 0, tD = 0, tB = 0, tA = 0; subs.forEach(s => { const dur = calculateDuration(s.startDate, s.endDate); tWP += (s.progress || 0) * dur; tD += dur; tB += Number(s.budget || 0); tA += Number(s.actualCost || 0); }); return { ...n, subTasks: subs, progress: tD ? Math.round(tWP / tD) : n.progress, budget: tB > 0 ? tB : n.budget, actualCost: tA > 0 ? tA : n.actualCost }; } return n; }); };
             const activeProject = useMemo(() => projects.find(p => p.id === activeId) || {}, [projects, activeId]);
             const chartData = useMemo(() => [activeProject], [activeProject]);
@@ -1121,6 +1188,15 @@
                 return 'bg-slate-100 text-slate-600 border-slate-200';
             };
             // ------------------------------------------------
+
+            if (projectsLoading) {
+                return (
+                    <div className="flex flex-col items-center justify-center min-h-[400px]">
+                        <div className="spinner mb-4"></div>
+                        <p className="text-slate-500 text-xs font-bold uppercase animate-pulse">Đang tải dữ liệu dự án từ Supabase...</p>
+                    </div>
+                );
+            }
 
             return (
                 <div className="max-w-[1600px] mx-auto pb-20 animate-fade-in">
@@ -1491,37 +1567,92 @@
         };
 
         const TodoList = () => {
-            const [todos, setTodos] = useState(() => {
-                const saved = localStorage.getItem('dt_todos_pro');
-                if (saved) {
-                    let parsed = JSON.parse(saved);
-                    return parsed.map(t => {
-                        // Tự động convert các trạng thái cũ sang chuẩn 4 cột mới
-                        if (t.status === 'in-progress') return { ...t, status: 'todo' };
-                        if (t.status === 'todo' && !['pending', 'scheduled', 'todo', 'done'].includes(t.status)) return { ...t, status: 'pending' };
-                        return t;
-                    });
-                }
-
-                // Migrate từ phiên bản cũ sang chuẩn dữ liệu mới
-                const old = localStorage.getItem('dt_todos_simple');
-                if (old) {
-                    return JSON.parse(old).map((t, i) => ({
-                        id: t.id.toString(), text: t.text, note: t.note || '',
-                        status: t.done ? 'done' : 'pending', priority: 'medium', showNote: t.showNote !== false
-                    }));
-                }
-                return [
-                    { id: '1', text: 'Lập kế hoạch ngân sách quý 4', status: 'pending', priority: 'high', note: 'Phân bổ chi phí vận hành chi tiết', showNote: true },
-                    { id: '2', text: 'Kiểm tra email từ đối tác', status: 'scheduled', priority: 'medium', note: 'Phản hồi về đơn hàng mới', showNote: false },
-                    { id: '3', text: 'Cập nhật biến động giá hạt nhựa', status: 'todo', priority: 'medium', note: '', showNote: false },
-                    { id: '4', text: 'Báo cáo nghiệm thu dự án', status: 'done', priority: 'low', note: '', showNote: false }
-                ];
-            });
+            const [todos, setTodos] = useState([]);
+            const [todosLoading, setTodosLoading] = useState(true);
             const [view, setView] = useState('list'); // 'list' hoặc 'board'
             const [input, setInput] = useState('');
+            const lastSavedTodos = useRef(null);
 
-            useEffect(() => localStorage.setItem('dt_todos_pro', JSON.stringify(todos)), [todos]);
+            useEffect(() => {
+                const loadTodos = async () => {
+                    try {
+                        const { data, error } = await supabase.from('dt_todos').select('*');
+                        if (error) throw error;
+                        if (data && data.length > 0) {
+                            const mapped = data.map(t => ({
+                                id: t.todo_id,
+                                text: t.text,
+                                status: t.status,
+                                priority: t.priority,
+                                note: t.note || '',
+                                showNote: t.show_note || false
+                            }));
+                            setTodos(mapped);
+                            lastSavedTodos.current = mapped;
+                        } else {
+                            const defaults = [
+                                { id: '1', text: 'Lập kế hoạch ngân sách quý 4', status: 'pending', priority: 'high', note: 'Phân bổ chi phí vận hành chi tiết', showNote: true },
+                                { id: '2', text: 'Kiểm tra email từ đối tác', status: 'scheduled', priority: 'medium', note: 'Phản hồi về đơn hàng mới', showNote: false },
+                                { id: '3', text: 'Cập nhật biến động giá hạt nhựa', status: 'todo', priority: 'medium', note: '', showNote: false },
+                                { id: '4', text: 'Báo cáo nghiệm thu dự án', status: 'done', priority: 'low', note: '', showNote: false }
+                            ];
+                            setTodos(defaults);
+                            for (const t of defaults) {
+                                await supabase.from('dt_todos').upsert({
+                                    todo_id: t.id,
+                                    text: t.text,
+                                    status: t.status,
+                                    priority: t.priority,
+                                    note: t.note,
+                                    show_note: t.showNote
+                                });
+                            }
+                            lastSavedTodos.current = defaults;
+                        }
+                    } catch (err) {
+                        console.error("Error loading todos from Supabase:", err);
+                    } finally {
+                        setTodosLoading(false);
+                    }
+                };
+                loadTodos();
+            }, []);
+
+            useEffect(() => {
+                if (!todos || todosLoading) return;
+                if (lastSavedTodos.current === null) {
+                    lastSavedTodos.current = todos;
+                    return;
+                }
+
+                const timer = setTimeout(async () => {
+                    const deleted = lastSavedTodos.current.filter(ot => !todos.some(t => t.id === ot.id));
+                    for (const t of deleted) {
+                        await supabase.from('dt_todos').delete().eq('todo_id', t.id);
+                    }
+
+                    const changed = todos.filter(t => {
+                        const prev = lastSavedTodos.current?.find(ot => ot.id === t.id);
+                        if (!prev) return true;
+                        return JSON.stringify(t) !== JSON.stringify(prev);
+                    });
+
+                    for (const t of changed) {
+                        await supabase.from('dt_todos').upsert({
+                            todo_id: t.id,
+                            text: t.text,
+                            status: t.status,
+                            priority: t.priority,
+                            note: t.note,
+                            show_note: t.showNote
+                        }, { onConflict: 'todo_id' });
+                    }
+
+                    lastSavedTodos.current = todos;
+                }, 1000);
+
+                return () => clearTimeout(timer);
+            }, [todos, todosLoading]);
 
             const add = () => {
                 if (!input.trim()) return;
@@ -1561,6 +1692,15 @@
                 if (p === 'medium') return 'bg-orange-100 text-orange-700 border-orange-200';
                 return 'bg-slate-100 text-slate-600 border-slate-200';
             };
+
+            if (todosLoading) {
+                return (
+                    <div className="py-10 animate-fade-in w-full h-full flex flex-col min-h-screen items-center justify-center bg-slate-100/50">
+                        <div className="spinner mb-4"></div>
+                        <p className="text-slate-500 text-xs font-bold uppercase animate-pulse">Đang tải việc cần làm từ Supabase...</p>
+                    </div>
+                );
+            }
 
             return (
                 <div className="py-10 animate-fade-in w-full h-full flex flex-col min-h-screen items-center bg-slate-100/50">
