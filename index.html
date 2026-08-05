@@ -1027,7 +1027,7 @@
                         } else {
                             const sample = [{ id: 'sample_01', name: 'DỰ ÁN CẢI TIẾN XƯỞNG NHỰA SỐ 1', manager: 'Lê Hoàng Sơn', createdAt: new Date().toISOString(), tasks: getTemplateTasks(), notes: '', password: '', todos: [] }];
                             setProjects(sample);
-                            await supabase.from('dt_projects').upsert({
+                            const { error: upsertErr } = await supabase.from('dt_projects').upsert({
                                 project_id: sample[0].id,
                                 name: sample[0].name,
                                 manager: sample[0].manager,
@@ -1036,11 +1036,15 @@
                                 notes: sample[0].notes,
                                 tasks: sample[0].tasks,
                                 todos: sample[0].todos
-                            });
+                            }, { onConflict: 'project_id' });
+                            if (upsertErr) {
+                                console.error("Lỗi khởi tạo dự án mẫu:", upsertErr.message, upsertErr.details);
+                            }
                             lastSavedProjects.current = sample;
                         }
                     } catch (err) {
-                        console.error("Error loading projects from Supabase:", err);
+                        console.error("Lỗi khi tải dự án từ Supabase:", err);
+                        alert("Không thể tải danh sách dự án: " + (err.message || err));
                     } finally {
                         setProjectsLoading(false);
                     }
@@ -1063,7 +1067,11 @@
                 const timer = setTimeout(async () => {
                     const deleted = lastSavedProjects.current.filter(op => !projects.some(p => p.id === op.id));
                     for (const p of deleted) {
-                        await supabase.from('dt_projects').delete().eq('project_id', p.id);
+                        const { error } = await supabase.from('dt_projects').delete().eq('project_id', p.id);
+                        if (error) {
+                            console.error("Lỗi xóa dự án trên Supabase:", error.message, error.details);
+                            alert("Lỗi khi xóa dự án: " + error.message);
+                        }
                     }
 
                     const changedProjects = projects.filter(p => {
@@ -1073,7 +1081,7 @@
                     });
 
                     for (const p of changedProjects) {
-                        await supabase.from('dt_projects').upsert({
+                        const { error } = await supabase.from('dt_projects').upsert({
                             project_id: p.id,
                             name: p.name,
                             manager: p.manager,
@@ -1081,8 +1089,12 @@
                             created_at: p.createdAt,
                             notes: p.notes,
                             tasks: p.tasks,
-                            todos: p.todos
+                            todos: p.todos || []
                         }, { onConflict: 'project_id' });
+                        if (error) {
+                            console.error("Lỗi cập nhật dự án trên Supabase:", error.message, error.details);
+                            alert("Lỗi khi cập nhật dự án: " + error.message);
+                        }
                     }
 
                     lastSavedProjects.current = projects;
@@ -1100,7 +1112,7 @@
             const delTask = (id) => updateProject({ tasks: recalculateTree((function del(nodes) { return nodes.filter(n => n.id !== id).map(n => ({ ...n, subTasks: del(n.subTasks) })) })(activeProject.tasks)) });
             const toggleTask = (id) => updateProject({ tasks: (function tog(nodes) { return nodes.map(n => n.id === id ? { ...n, expanded: !n.expanded } : { ...n, subTasks: tog(n.subTasks) }) })(activeProject.tasks) });
             const openCreateModal = () => { setModalData({ name: '', manager: 'Lê Hoàng Sơn', password: '' }); setModalType('create'); };
-            const confirmCreateProject = () => { if (!modalData.name) return alert("Vui lòng nhập tên dự án!"); const id = 'p' + Date.now(); setProjects([...projects, { id, name: modalData.name, manager: modalData.manager, password: modalData.password || '', createdAt: new Date().toISOString(), tasks: getTemplateTasks(), notes: '' }]); setModalType(null); };
+            const confirmCreateProject = () => { if (!modalData.name) return alert("Vui lòng nhập tên dự án!"); const id = 'p' + Date.now(); setProjects([...projects, { id, name: modalData.name, manager: modalData.manager, password: modalData.password || '', createdAt: new Date().toISOString(), tasks: getTemplateTasks(), notes: '', todos: [] }]); setModalType(null); };
             const openDeleteModal = (e, projId) => { e.stopPropagation(); setModalData({ id: projId }); setModalType('delete'); };
             const confirmDeleteProject = () => { setProjects(prev => prev.filter(p => p.id !== modalData.id)); setModalType(null); };
 
@@ -1598,19 +1610,23 @@
                             ];
                             setTodos(defaults);
                             for (const t of defaults) {
-                                await supabase.from('dt_todos').upsert({
+                                const { error: upsertErr } = await supabase.from('dt_todos').upsert({
                                     todo_id: t.id,
                                     text: t.text,
                                     status: t.status,
                                     priority: t.priority,
                                     note: t.note,
                                     show_note: t.showNote
-                                });
+                                }, { onConflict: 'todo_id' });
+                                if (upsertErr) {
+                                    console.error("Lỗi khởi tạo việc cần làm mẫu:", upsertErr.message, upsertErr.details);
+                                }
                             }
                             lastSavedTodos.current = defaults;
                         }
                     } catch (err) {
-                        console.error("Error loading todos from Supabase:", err);
+                        console.error("Lỗi khi tải danh sách việc cần làm từ Supabase:", err);
+                        alert("Không thể tải danh sách việc cần làm: " + (err.message || err));
                     } finally {
                         setTodosLoading(false);
                     }
@@ -1628,7 +1644,11 @@
                 const timer = setTimeout(async () => {
                     const deleted = lastSavedTodos.current.filter(ot => !todos.some(t => t.id === ot.id));
                     for (const t of deleted) {
-                        await supabase.from('dt_todos').delete().eq('todo_id', t.id);
+                        const { error } = await supabase.from('dt_todos').delete().eq('todo_id', t.id);
+                        if (error) {
+                            console.error("Lỗi xóa việc cần làm trên Supabase:", error.message, error.details);
+                            alert("Lỗi khi xóa việc cần làm: " + error.message);
+                        }
                     }
 
                     const changed = todos.filter(t => {
@@ -1638,7 +1658,7 @@
                     });
 
                     for (const t of changed) {
-                        await supabase.from('dt_todos').upsert({
+                        const { error } = await supabase.from('dt_todos').upsert({
                             todo_id: t.id,
                             text: t.text,
                             status: t.status,
@@ -1646,6 +1666,10 @@
                             note: t.note,
                             show_note: t.showNote
                         }, { onConflict: 'todo_id' });
+                        if (error) {
+                            console.error("Lỗi cập nhật việc cần làm trên Supabase:", error.message, error.details);
+                            alert("Lỗi khi cập nhật việc cần làm: " + error.message);
+                        }
                     }
 
                     lastSavedTodos.current = todos;
